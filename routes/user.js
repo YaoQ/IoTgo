@@ -4,12 +4,17 @@
 var express = require('express');
 var expressJwt = require('express-jwt');
 var jsonWebToken = require('jsonwebtoken');
+var unless = require('express-unless');
 var config = require('../config');
 var db = require('../db/index');
 var User = db.User;
 var Device = db.Device;
 var FactoryDevice = db.FactoryDevice;
 var https = require('https');
+var email_util = require('../lib/email-util');
+var jade = require('jade');
+var uuid = require('uuid');
+var path = require('path');
 
 /**
  * Private variables
@@ -17,6 +22,18 @@ var https = require('https');
 var recaptchaSecret = config.recaptcha.secret;
 var recaptchaUrl = config.recaptcha.url;
 
+var activedAccountOnly = function (req, res, next) {
+  var isActivated = req.user.isActivated;
+  if (isActivated) {
+    next();
+  } else {
+    var err = new Error('Actived Account only area!');
+    err.status = 401;
+    next(err);
+  }
+};
+
+activedAccountOnly.unless = unless;
 /**
  * Exports
  */
@@ -24,14 +41,18 @@ module.exports = exports = express.Router();
 
 // Enable Json Web Token
 exports.use(expressJwt(config.jwt).unless({
-  path: ['/api/user/register', '/api/user/login']
+  path: ['/api/user/register', '/api/user/login', '/api/user/validate']
+}));
+
+exports.use(activedAccountOnly.unless({
+  path: ['/api/user/register', '/api/user/login', '/api/user/activeAccount', '/api/user/validate']
 }));
 
 // Registration
 exports.route('/register').post(function (req, res) {
   var email = req.body.email;
   var password = req.body.password;
-  if (! email || ! password) {
+  if (!email || !password) {
     res.send({
       error: 'Email address and password must not be empty!'
     });
@@ -55,7 +76,7 @@ exports.route('/register').post(function (req, res) {
   // Google reCAPTCHA verification
   /*
   var response = req.body.response;
-  if (! response) {
+  if (!response) {
     res.send({
       error: 'reCAPTCHA verification is required!'
     });
@@ -75,7 +96,7 @@ exports.route('/register').post(function (req, res) {
     recaptchaRes.on('end', function () {
       try {
         data = JSON.parse(data);
-        if (! data.success) {
+        if (!data.success) {
           res.send({
             error: 'reCAPTCHA verification failed!'
           });
@@ -89,10 +110,34 @@ exports.route('/register').post(function (req, res) {
             });
             return;
           }
-
-          res.send({
-            jwt: jsonWebToken.sign(user, config.jwt.secret),
-            user: user
+          var token = uuid.v4();
+          User.resetToken(email, token, function (err, user, msg) {
+            if (err) {
+              res.send({error: err});
+              return;
+            }
+            var host = req.get('Host');
+            var href = "http://" + host;
+            href += '/api/user/validate?email=' + email + '&token=' + token;
+            if (user) {
+              var _user = {email: email, href: href};
+              var html = jade.renderFile(path.join(__dirname, '../template/activeEmail.jade'), {user: _user});
+              var mailOption = {
+                to: email,
+                subject: 'IoTgo: Confirm Your Email Address',
+                html: html
+              };
+              email_util.sendMail(mailOption, function (err, body) {
+                if (err) {
+                  res.send({error: err});
+                  return;
+                }
+                res.send({
+                  jwt: jsonWebToken.sign(user, config.jwt.secret),
+                  user: user
+                });
+              });
+            }
           });
         });
       }
@@ -111,11 +156,64 @@ exports.route('/register').post(function (req, res) {
 
 });
 
+exports.route('/activeAccount').get(function (req, res) {
+  var email = req.user.email;
+  var token = uuid.v4();
+  User.resetToken(email, token, function (err, user, msg) {
+    if (err) {
+      res.send({error: err});
+      return;
+    }
+    if (user) {
+      var host = req.get('Host');
+      var href = "http://" + host;
+      var logo = href +'/images/logo.png';
+      href += '/api/user/validate?email=' + email + '&token=' + token;
+      var _user = {email: email, href: href, logo: logo};
+      var html = jade.renderFile(path.join(__dirname, '../template/activeEmail.jade'), {user: _user});
+      var mailOption = {
+        to: email,
+        subject: 'IoTgo: Confirm Your Email Address',
+        html: html
+      };
+      email_util.sendMail(mailOption, function (err, body) {
+        if (err) {
+          res.send({error: err});
+          return;
+        }
+        res.send({message: msg});
+      });
+    }
+  });
+});
+
+exports.route('/validate').get(function (req, res) {
+  var email = req.query.email;
+  var token = req.query.token;
+  if (!email || !token) {
+    res.send({
+      error: 'Email address and token must not be empty!'
+    });
+    return;
+  }
+  User.active(email, token, function (err, user, msg) {
+    if (err) {
+      res.send({error: err});
+      return;
+    }
+    if (user) {
+      res.redirect('/login');
+    } else {
+      res.send(msg);
+    }
+  });
+});
+
 // Login
 exports.route('/login').post(function (req, res) {
   var email = req.body.email;
   var password = req.body.password;
-  if (! email || ! password) {
+  if (!email || !password) {
     res.send({
       error: 'Email address and password must not be empty!'
     });
@@ -123,7 +221,7 @@ exports.route('/login').post(function (req, res) {
   }
 
   User.authenticate(email, password, function (err, user) {
-    if (err || ! user) {
+    if (err || !user) {
       res.send({
         error: 'Email address or password is not correct!'
       });
@@ -142,8 +240,8 @@ exports.route('/password').post(function (req, res) {
   var oldPassword = req.body.oldPassword;
   var newPassword = req.body.newPassword;
 
-  if (typeof oldPassword !== 'string' || ! oldPassword.trim() ||
-    typeof newPassword !== 'string' || ! newPassword.trim()) {
+  if (typeof oldPassword !== 'string' || !oldPassword.trim() ||
+    typeof newPassword !== 'string' || !newPassword.trim()) {
     res.send({
       error: 'Old password and new password must not be empty!'
     });
@@ -158,7 +256,7 @@ exports.route('/password').post(function (req, res) {
       return;
     }
 
-    if (! user) {
+    if (!user) {
       res.send({
         error: 'Old password is not correct!'
       });
@@ -181,7 +279,7 @@ exports.route('/password').post(function (req, res) {
 // Device management
 exports.route('/device').get(function (req, res) {
   Device.getDevicesByApikey(req.user.apikey, function (err, devices) {
-    if (err || ! devices.length) {
+    if (err || !devices.length) {
       res.send([]);
       return;
     }
@@ -189,7 +287,7 @@ exports.route('/device').get(function (req, res) {
     res.send(devices);
   });
 }).post(function (req, res) {
-  if (! req.body.name || ! req.body.type) {
+  if (!req.body.name || !req.body.type) {
     res.send({
       error: 'Device name and type must be specified!'
     });
@@ -229,16 +327,16 @@ exports.route('/device/add').post(function (req, res) {
   var name = req.body.name;
   var apikey = req.body.apikey;
   var deviceid = req.body.deviceid;
-  if ('string' !== typeof name || ! name.trim() ||
-    'string' !== typeof apikey || ! apikey.trim() ||
-    'string' !== typeof deviceid || ! deviceid.trim()) {
+  if ('string' !== typeof name || !name.trim() ||
+    'string' !== typeof apikey || !apikey.trim() ||
+    'string' !== typeof deviceid || !deviceid.trim()) {
     res.send({
       error: 'Device name, id and apikey must not be empty!'
     });
     return;
   }
 
-  if (! /^[0-9a-f]{10}$/.test(deviceid)) {
+  if (!/^[0-9a-f]{10}$/.test(deviceid)) {
     res.send({
       error: 'Invalid device id format!'
     });
@@ -253,7 +351,7 @@ exports.route('/device/add').post(function (req, res) {
       return;
     }
 
-    if (! device) {
+    if (!device) {
       res.send({
         error: 'Device does not exist!'
       });
@@ -299,7 +397,7 @@ exports.route('/device/add').post(function (req, res) {
 
 exports.route('/device/:deviceid').get(function (req, res) {
   Device.exists(req.user.apikey, req.params.deviceid, function (err, device) {
-    if (err || ! device) {
+    if (err || !device) {
       res.send({
         error: 'Device does not exist!'
       });
@@ -310,7 +408,7 @@ exports.route('/device/:deviceid').get(function (req, res) {
   });
 }).post(function (req, res) {
   if (typeof req.body.name !== 'string' ||
-      typeof req.body.group !== 'string') {
+    typeof req.body.group !== 'string') {
     res.send({
       error: 'Device name and group must not be empty!'
     });
@@ -318,7 +416,7 @@ exports.route('/device/:deviceid').get(function (req, res) {
   }
 
   Device.exists(req.user.apikey, req.params.deviceid, function (err, device) {
-    if (err || ! device) {
+    if (err || !device) {
       res.send({
         error: 'Device does not exist!'
       });
@@ -340,7 +438,7 @@ exports.route('/device/:deviceid').get(function (req, res) {
   });
 }).delete(function (req, res) {
   Device.exists(req.user.apikey, req.params.deviceid, function (err, device) {
-    if (err || ! device) {
+    if (err || !device) {
       res.send({
         error: 'Device does not exist!'
       });
