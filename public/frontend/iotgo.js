@@ -1,4 +1,4 @@
-angular.module('iotgo', [ 'ngRoute', 'ngResource', 'gRecaptcha', 'angular-carousel' ]).
+angular.module('iotgo', [ 'ngRoute', 'ngResource', /*'gRecaptcha',*/ 'angular-carousel' ]).
   run([ '$location', function ($location) {
     // Permanent url support
     var path = $location.search().path;

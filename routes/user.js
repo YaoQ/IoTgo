@@ -38,7 +38,22 @@ exports.route('/register').post(function (req, res) {
     return;
   }
 
+  User.register(email, password, function (err, user) {
+    if (err) {
+      res.send({
+        error: 'Email address already exists, please choose another one.'
+      });
+      return;
+    }
+
+    res.send({
+      jwt: jsonWebToken.sign(user, config.jwt.secret),
+      user: user
+    });
+  });
+
   // Google reCAPTCHA verification
+  /*
   var response = req.body.response;
   if (! response) {
     res.send({
@@ -92,6 +107,7 @@ exports.route('/register').post(function (req, res) {
       error: 'reCAPTCHA verification failed! Please try again later.'
     });
   });
+  */
 
 });
 

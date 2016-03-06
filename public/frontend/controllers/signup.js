@@ -7,6 +7,7 @@ angular.module('iotgo').
           return;
         }
 
+        $scope.response = 'disable Google reCAPTCHA';
         if (! $scope.response) {
           $window.alert('Are you robot? Robot is not welcome here!');
           return;
