@@ -2,10 +2,6 @@ var express = require('express');
 var favicon = require('serve-favicon');
 var logger = require('morgan');
 var bodyParser = require('body-parser');
-//var cookieParser = require('cookie-parser');
-var session = require('express-session');
-//var sessionStore = require('connect-redis');
-
 
 var routes = require('./routes/index');
 
@@ -23,20 +19,6 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 
 app.use('/api', routes);
-//Setup up session for https
-
-app.set('trust proxy',1);
-//app.use(bodyParser());
-//app.use(cookieParser());
-app.use(session({
-        secret: 'Super Secret Password',
-        proxy: true,
-        resave: true,
-        saveUninitialized: true,
-        key:'session.sid',
-        cookie :{secure: true} //,
-//        store : new sessionStore()
-}));
 
 // catch 404 and redirect to /
 app.use(function(req, res, next) {

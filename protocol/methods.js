@@ -113,10 +113,3 @@ exports.query = function (req, callback) {
     }));
   });
 };
-
-exports.date = function (req, callback) {
-  callback(interceptors(req, {
-    error: 0,
-    date: (new Date()).toISOString()
-  }));
-};
